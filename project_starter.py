@@ -632,21 +632,16 @@ def map_product_name(search_term: str) -> str:
     """
     valid_names = [p['item_name'] for p in paper_supplies]
     
-    # 1. Exact Match
+    # Exact Match
     if search_term in valid_names:
         return search_term
         
-    # 2. Fuzzy Match (Simulates Embeddings/Semantic Search)
+    # Fuzzy Match (Simulates Embeddings/Semantic Search)
     # cutoff=0.3 allows for loose matches like "print paper" -> "Standard copy paper"
     matches = difflib.get_close_matches(search_term, valid_names, n=1, cutoff=0.3)
     
     if matches:
         return matches[0]
-    
-    # 3. Substring fallback (e.g. "A4" matches "A4 paper")
-    for name in valid_names:
-        if search_term.lower() in name.lower() or name.lower() in search_term.lower():
-            return name
             
     return "Product Not Found"
 
@@ -660,8 +655,23 @@ def check_stock(item_name: str, date: str) -> int:
         date: The request date (YYYY-MM-DD).
     """
     # Uses the helper function provided in starter code
-    return get_stock_level(item_name, date)
+    df = get_stock_level(item_name, date)
+    if df.empty:
+        return 0
+    return int(df['current_stock'].iloc[0])
 
+@tool
+def check_supplier_delivery(date: str, quantity: int) -> str:
+    """
+    Checks when a new batch of supplies would arrive if ordered today.
+    Use this to inform the user about delays if restocking is needed.
+    
+    Args:
+        date: The current date (YYYY-MM-DD).
+        quantity: The amount intended to be ordered.
+    """
+    # Uses the helper function provided in starter code
+    return get_supplier_delivery_date(date, quantity)
 
 @tool
 def restock_inventory(item_name: str, quantity: int, date: str) -> str:
@@ -682,7 +692,17 @@ def restock_inventory(item_name: str, quantity: int, date: str) -> str:
     create_transaction(item_name, 'stock_orders', quantity, cost, date)
     return f"Restocked {quantity} units of {item_name}."
 
-
+@tool
+def audit_inventory(date: str) -> str:
+    """
+    Get a full list of all items currently in stock.
+    
+    Args:
+        date: The date to check inventory for.
+    """
+    # Uses the helper function provided in starter code
+    inventory_dict = get_all_inventory(date)
+    return str(inventory_dict)
 
 
 # Tools for quoting agent
@@ -738,6 +758,17 @@ def finalize_transaction(item_name: str, quantity: int, total_price: float, date
     create_transaction(item_name, 'sales', quantity, total_price, date)
     return f"Sale Recorded: {quantity} {item_name} for ${total_price}"
 
+@tool
+def check_funds(date: str) -> float:
+    """
+    Checks the current cash balance of the company.
+    
+    Args:
+        date: The date to check balance for.
+    """
+    # Uses the helper function provided in starter code
+    return get_cash_balance(date)
+
 
 # Set up your agents and create an orchestration agent that will manage them.
 
@@ -756,13 +787,19 @@ inventory_agent = ToolCallingAgent(
     4. IF STOCK IS LOW: You MUST use 'restock_inventory' to buy the difference immediately.
     5. Return the exact item name and confirmation that stock is ready.
     """,
-    tools=[map_product_name, check_stock, restock_inventory]
+    tools=[map_product_name, check_stock, check_supplier_delivery, restock_inventory, audit_inventory]
 )
 
 quoting_agent = ToolCallingAgent(
     model=model,
     name="quoting_agent",
-    description="Calculates final prices including bulk discounts.",
+    description="""
+    You are the Sales Quoter.
+    Responsibilities:
+    1. Calculate the price for specific items and quantities using 'calculate_quote'.
+    2. Check 'get_historical_quotes' to ensure pricing consistency.
+    3. Provide the final quote amount.
+    """,
     tools=[get_historical_quotes, calculate_quote]
 )
 sales_agent = ToolCallingAgent(
@@ -781,6 +818,21 @@ orchestrator = ToolCallingAgent(
     model=model,
     name="orchestrator",
     description="""
+    You are the Main Office Manager at Munder Difflin.
+    
+    Your Process:
+    1. Read the user request. EXTRACT the 'request_date' from the prompt.
+    2. Identify the items and quantities needed.
+    3. Delegate to 'inventory_agent' to ensure we have the stock.
+    4. Delegate to 'quoting_agent' to get the total price.
+    5. Delegate to 'sales_agent' to finalize the transaction.
+    6. Respond to the user confirming the order details.
+    """,
+    managed_agents=[inventory_agent, quoting_agent, sales_agent],
+    tools=[]
+)
+"""
+ description=
     You are the Process Manager.
     
     YOUR JOB:
@@ -795,10 +847,10 @@ orchestrator = ToolCallingAgent(
     
     OUTPUT:
     Report the final status of the order to the user.
-    """,
+,
     managed_agents=[inventory_agent,quoting_agent, sales_agent ],
     tools=[] # No direct tools, only manages others
-)
+"""
 
 # Run your test scenarios by writing them here. Make sure to keep track of them.
 
