@@ -14,9 +14,10 @@ The workflow follows a top-down orchestration pattern:
 
 ### 1.2 Agent Tools
 * **Inventory Tools**: 
-    * `search_item_in_catalog`: Uses an LLM call to intelligently map user intent to catalog items (e.g., mapping "shiny paper" to "Glossy paper"). This solved major issues with fuzzy matching failing on synonyms.
+    * `map_item_to_database`: Uses an LLM call to intelligently map user intent to catalog items (e.g., mapping "shiny paper" to "Glossy paper"). This solved major issues with fuzzy matching failing on synonyms.
     * `check_stock`: Queries the SQLite database for current levels.
     * `restock_inventory`: Automatically purchases stock when low.
+    * `audit_inventory`: get the complete inventory.
 * **Quoting Tools**: 
     * `calculate_quote`: Applies business logic (10% discount for orders > 500 units).
     * `get_historical_quotes`: Retrieves past context.

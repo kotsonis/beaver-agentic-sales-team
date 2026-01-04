@@ -649,37 +649,45 @@ def search_item_in_catalog(search_term: str) -> str:
         return matches[0] if matches else "Product Not Found"
     
 @tool
-def map_product_name(search_term: str) -> str:
+def map_item_to_database(search_term: str) -> str:
     """
-    Matches a user's vague product description to the exact catalog name using fuzzy matching.
-    ALWAYS use this before checking stock or quoting to ensure you have the correct key.
+    Maps a vague user description (e.g. "printer paper") to the EXACT item name from the database.
+    ALWAYS use this before checking stock to ensure you have the correct key.
     
     Args:
-        search_term: The user's description (e.g. "colorful sheets", "shiny paper")
+        search_term: The user's vague description.
+
+    Returns:
+        The exact catalog item name, or "Product Not Found" if no match exists.
     """
     valid_names = [p['item_name'] for p in paper_supplies]
     
-    # Exact Match
-    if search_term in valid_names:
-        return search_term
-      
-       
-    # Case-insensitive Match
-    for name in valid_names:
-        if search_term.lower() == name.lower():
-            return name
-
-    # Fuzzy Match
-    matches = difflib.get_close_matches(search_term, valid_names, n=1, cutoff=0.4)
-    if matches:
-        return matches[0]
+    # Use the LLM to classify the intent to the exact catalog name
+    # This solves the "fuzzy matching" unreliability
+    prompt = f"""
+    You are an Inventory Database Matcher.
     
-    # Substring Fallback
-    for name in valid_names:
-        if search_term.lower() in name.lower() or name.lower() in search_term.lower():
-            return name
-        
-    return "Product Not Found"
+    DATABASE CATALOG:
+    {valid_names}
+    
+    USER REQUEST: "{search_term}"
+    
+    INSTRUCTIONS:
+    1. Find the item in the CATALOG that best matches the USER REQUEST.
+    2. If "printer paper" or "copy paper" is asked, map it to "Standard copy paper" (or "A4 paper" if specified).
+    3. Return ONLY the exact string from the catalog.
+    4. If no logical match exists, return "Product Not Found".
+    """
+    
+    messages = [{"role": "user", "content": prompt}]
+    
+    try:
+        response = model(messages)
+        content = response.content if hasattr(response, 'content') else str(response)
+        return content.strip()
+    except Exception:
+        return "Product Not Found"
+
 
 @tool
 def check_stock(item_name: str, date: str) -> int:
@@ -824,20 +832,21 @@ inventory_agent = ToolCallingAgent(
     name="inventory_agent",
     description="""
     You are the Inventory Manager.
-    Your goal is to ensure items are available for sale.
     
-    PROTOCOL:
-    1. Receive a product name (or vague description) and a quantity.
-    2. Use 'search_item_in_catalog' to find the real database name.
-    3. Use 'check_stock' to see if we have enough.
-    3. IF stock < requested quantity:
-       - Call 'restock_item' immediately to cover the difference.
-       - Call 'check_delivery_time' to inform the user when it arrives.
-    5. Return the exact item name and confirmation that stock is ready.
+    YOUR PROCESS:
+    1. Read the user's item request.
+    2. FIND THE DATABASE MATCH: Call 'map_item_to_database' with the user's description.
+    3. CHECK STOCK: Call 'check_stock' using the EXACT name returned by step 2.
+    4. DECIDE: 
+       - If stock >= requested: Confirm availability.
+       - If stock < requested: Call 'restock_item' IMMEDIATELY for the missing amount, then call 'check_supplier_delivery'.
+    
+    OUTPUT:
+    Return the exact valid item name used and the status (Stock Ready / Restocked).
     """,
-    tools=[search_item_in_catalog, check_stock, check_supplier_delivery, restock_inventory, audit_inventory],
-    verbosity_level = 1,
-    max_steps = 5,
+    tools=[map_item_to_database, check_stock, check_supplier_delivery, restock_inventory, audit_inventory],
+    verbosity_level=1,
+    max_steps=6 
 )
 
 quoting_agent = ToolCallingAgent(

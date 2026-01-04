@@ -6,7 +6,7 @@ graph TD
     Orchestrator -->|3. Finalize Order| Sales[Sales Agent]
     
     subgraph "Inventory Tools"
-        I1(search_item_in_catalog)
+        I1(map_item_to_database)
         I2(check_stock)
         I3(check_supplier_delivery)
         I4(restock_inventory)
