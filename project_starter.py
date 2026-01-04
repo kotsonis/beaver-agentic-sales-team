@@ -590,30 +590,222 @@ def search_quote_history(search_terms: List[str], limit: int = 5) -> List[Dict]:
 
 
 # Set up and load your env parameters and instantiate your model.
+from smolagents import ToolCallingAgent, OpenAIServerModel, tool
+from dotenv import load_dotenv
+import difflib
+from typing import TypedDict, Any, List, Dict
 
+load_dotenv()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")
+model = OpenAIServerModel(
+    model_id="gpt-4",
+    api_key=OPENAI_API_KEY,
+    api_base = OPENAI_BASE_URL,
+)
 
 """Set up tools for your agents to use, these should be methods that combine the database functions above
  and apply criteria to them to ensure that the flow of the system is correct."""
 
+# Define the shared state structure to be passed between agents to maintain context and reduce hallucinations.
+
+class OrderState(TypedDict):
+    """The shared memory of the transaction."""
+    request_id: int
+    user_raw_request: str
+    simulation_date: str          # The 'Clock' for this request
+    items: List[Dict[str, Any]]   # Structured list of items
+    stock_status: Dict[str, str]  # Status of each item
+    quote_amount: float           # Final calculated price
+    transaction_ids: List[str]    # DB IDs after sale
+    logs: List[str]               # Audit trail
 
 # Tools for inventory agent
+@tool
+def map_product_name(search_term: str) -> str:
+    """
+    Matches a user's vague product description to the exact catalog name using fuzzy matching.
+    ALWAYS use this before checking stock or quoting to ensure you have the correct key.
+    
+    Args:
+        search_term: The user's description (e.g. "colorful sheets", "shiny paper")
+    """
+    valid_names = [p['item_name'] for p in paper_supplies]
+    
+    # 1. Exact Match
+    if search_term in valid_names:
+        return search_term
+        
+    # 2. Fuzzy Match (Simulates Embeddings/Semantic Search)
+    # cutoff=0.3 allows for loose matches like "print paper" -> "Standard copy paper"
+    matches = difflib.get_close_matches(search_term, valid_names, n=1, cutoff=0.3)
+    
+    if matches:
+        return matches[0]
+    
+    # 3. Substring fallback (e.g. "A4" matches "A4 paper")
+    for name in valid_names:
+        if search_term.lower() in name.lower() or name.lower() in search_term.lower():
+            return name
+            
+    return "Product Not Found"
+
+@tool
+def check_stock(item_name: str, date: str) -> int:
+    """
+    Checks the exact stock level in the database.
+    
+    Args:
+        item_name: The EXACT catalog name (get this from map_product_name first).
+        date: The request date (YYYY-MM-DD).
+    """
+    # Uses the helper function provided in starter code
+    return get_stock_level(item_name, date)
+
+
+@tool
+def restock_inventory(item_name: str, quantity: int, date: str) -> str:
+    """
+    Orders new stock from the supplier to add to inventory. 
+    Use this if stock is insufficient.
+    
+    Args:
+        item_name: The EXACT catalog name.
+        quantity: The amount to order.
+        date: The request date.
+    """
+    # Calculate cost (default to 0.10 if not found)
+    price_map = {p['item_name']: p['unit_price'] for p in paper_supplies}
+    cost = quantity * price_map.get(item_name, 0.10)
+    
+    # Uses the helper function provided in starter code
+    create_transaction(item_name, 'stock_orders', quantity, cost, date)
+    return f"Restocked {quantity} units of {item_name}."
+
+
 
 
 # Tools for quoting agent
+@tool
+def calculate_quote(item_name: str, quantity: int) -> float:
+    """
+    Calculates price with bulk discounts (10% off for 500+ units).
+    
+    Args:
+        item_name: Product name.
+        quantity: Amount requested.
+    """
+    price_map = {p['item_name']: p['unit_price'] for p in paper_supplies}
+    base_price = price_map.get(item_name, 0) * quantity
+    
+    # Apply Bulk Discount Rule
+    if quantity >= 500:
+        base_price *= 0.90
+        
+    return round(base_price, 2)
+    
+@tool
+def get_historical_quotes(keywords: List[str]) -> str:
+    """
+    Searches past quotes to see what we charged for similar requests.
+    
+    Args:
+        keywords: A list of keywords to search for (e.g., ['large order', 'A4 paper'])
+    """
+    results = search_quote_history(keywords)
+    if not results:
+        return "No relevant historical quotes found."
+    
+    formatted = []
+    for r in results:
+        formatted.append(f"Date: {r['order_date']}, Total: ${r['total_amount']}, Explanation: {r['quote_explanation']}")
+    return "\n".join(formatted)
+
 
 
 # Tools for ordering agent
+@tool
+def finalize_transaction(item_name: str, quantity: int, total_price: float, date: str) -> str:
+    """
+    Finalizes a sale by deducting stock and recording revenue.
+    
+    Args:
+        item_name: Product sold.
+        quantity: Amount sold.
+        total_price: Final agreed price.
+        date: Transaction date (YYYY-MM-DD).
+    """
+    create_transaction(item_name, 'sales', quantity, total_price, date)
+    return f"Sale Recorded: {quantity} {item_name} for ${total_price}"
 
 
 # Set up your agents and create an orchestration agent that will manage them.
 
+# Define Worker Agents
+inventory_agent = ToolCallingAgent(
+    model=model,
+    name="inventory_agent",
+    description="""
+    You are the Inventory Manager.
+    Your goal is to ensure items are available for sale.
+    
+    PROTOCOL:
+    1. Receive a product name (or vague description) and a quantity.
+    2. Use 'map_product_name' to find the real database name.
+    3. Use 'check_stock' to see if we have enough.
+    4. IF STOCK IS LOW: You MUST use 'restock_inventory' to buy the difference immediately.
+    5. Return the exact item name and confirmation that stock is ready.
+    """,
+    tools=[map_product_name, check_stock, restock_inventory]
+)
+
+quoting_agent = ToolCallingAgent(
+    model=model,
+    name="quoting_agent",
+    description="Calculates final prices including bulk discounts.",
+    tools=[get_historical_quotes, calculate_quote]
+)
+sales_agent = ToolCallingAgent(
+    model=model,
+    name="sales_agent",
+    description="Records the final sale in the database.",
+    tools=[finalize_transaction]
+)
+
+# I am defining the orchestrator agent that will manage the workflow
+# as a ToolCallingAgent that uses the other agents as tools.
+# I start by wrapping each agent's run method as a tool.
+
+
+orchestrator = ToolCallingAgent(
+    model=model,
+    name="orchestrator",
+    description="""
+    You are the Process Manager.
+    
+    YOUR JOB:
+    1. Read the user's request text carefully.
+    2. EXTRACT THE DATE: The date is always mentioned in the text (e.g., "by April 15, 2025"). Use this date for ALL tool calls.
+    3. Identify every item and quantity requested.
+    
+    EXECUTION FLOW (For each item):
+    A. Call 'inventory_agent': Ask them to ensure stock is available for the item.
+    B. Call 'quoting_agent': Ask for the price.
+    C. Call 'sales_agent': Finalize the sale.
+    
+    OUTPUT:
+    Report the final status of the order to the user.
+    """,
+    managed_agents=[inventory_agent,quoting_agent, sales_agent ],
+    tools=[] # No direct tools, only manages others
+)
 
 # Run your test scenarios by writing them here. Make sure to keep track of them.
 
 def run_test_scenarios():
     
     print("Initializing Database...")
-    init_database()
+    init_database(db_engine)
     try:
         quote_requests_sample = pd.read_csv("quote_requests_sample.csv")
         quote_requests_sample["request_date"] = pd.to_datetime(
@@ -638,7 +830,7 @@ def run_test_scenarios():
     ############
     ############
     ############
-
+   
     results = []
     for idx, row in quote_requests_sample.iterrows():
         request_date = row["request_date"].strftime("%Y-%m-%d")
@@ -659,8 +851,13 @@ def run_test_scenarios():
         ############
         ############
         ############
+        try:
+            # We pass the raw text. The Orchestrator is instructed to extract the date from it.
+            # (e.g. "Please deliver by April 15, 2025")
+            response = orchestrator.run(request_with_date)
+        except Exception as e:
+            response = f"Error: {e}"
 
-        # response = call_your_multi_agent_system(request_with_date)
 
         # Update state
         report = generate_financial_report(request_date)
