@@ -1,0 +1,43 @@
+request_id,request_date,cash_balance,inventory_value,response
+1,2025-04-01,45049.7,4950.3,"You can submit your request for the paper supplies as follows:
+
+---
+
+Subject: Request for Paper Supplies for Ceremony
+
+Dear [Inventory Team],
+
+I would like to request the following paper supplies for an upcoming ceremony:
+
+- 200 sheets of A4 glossy paper
+- 100 sheets of heavy cardstock (white)
+- 100 sheets of colored paper (assorted colors)
+
+Please ensure that these supplies are delivered by April 15, 2025. Thank you for your assistance!
+
+Best regards,
+
+[Your Name]  
+[Your Contact Information]  
+[Your Position, if applicable]
+
+---
+
+Make sure to replace placeholder text with your personal information before sending the request."
+2,2025-04-03,44984.7,5000.3,"We have restocked 500 sheets of colorful poster paper, and they will arrive by October 11, 2023. However, I cannot finalize the order for the 300 rolls of streamers due to a negative cash balance of $25.00. Immediate action is needed to address the financial issues before proceeding with further purchases."
+3,2025-04-04,44984.7,5000.3,"Based on the current inventory checks and supplier information, here's the status of your order request:
+
+1. **A4 Paper**: 
+   - We need to check the stock availability for 10,000 sheets of A4 paper. Please confirm if you'd like to proceed with finding this information or if you would like to explore alternative options.
+
+2. **A3 Paper**: 
+   - Currently, we have confirmed that 5,000 sheets of A3 paper are not available in stock. We will need to order A3 paper from an external supplier, and you should consider checking with suppliers for their availability and delivery schedules.
+
+3. **Printer Paper**: 
+   - We found that there are 0 reams of standard printer paper available in our inventory. However, it has been confirmed that if you place an order for 500 reams of printer paper, the delivery is scheduled for **October 13, 2023**. If this delivery date is acceptable, please proceed with the reorder.
+
+### Summary of Action Required:
+- Please confirm if you want to proceed with placing orders for the A4 paper and A3 paper.
+- For the printer paper, you should place the order as soon as possible to ensure you receive it on the scheduled date.
+
+Let me know how you would like to proceed!"

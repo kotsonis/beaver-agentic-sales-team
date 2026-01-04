@@ -1,0 +1,41 @@
+graph TD
+    User((Customer Request)) --> Orchestrator[Orchestrator Agent]
+    
+    Orchestrator -->|1. Identify & Check Stock| Inventory[Inventory Agent]
+    Orchestrator -->|2. Request Price Quote| Quote[Quoting Agent]
+    Orchestrator -->|3. Finalize Order| Sales[Sales Agent]
+    
+    subgraph "Inventory Tools"
+        I1(search_item_in_catalog)
+        I2(check_stock)
+        I3(check_supplier_delivery)
+        I4(restock_inventory)
+    end
+    
+    subgraph "Quoting Tools"
+        Q1(calculate_quote)
+        Q2(get_historical_quotes)
+    end
+    
+    subgraph "Sales Tools"
+        S1(finalize_transaction)
+        S2(generate_report_tool)
+    end
+    
+    Inventory --> I1
+    Inventory --> I2
+    I2 -->|Stock Low| I4
+    I4 --> I3
+    I2 -->|Stock OK| Orchestrator
+    
+    Quote --> Q1
+    Quote --> Q2
+    
+    Sales --> S1
+    Sales --> S2
+    
+    Inventory -->|Stock Ready| Orchestrator
+    Quote -->|Price Confirmed| Orchestrator
+    Sales -->|Sale Recorded| Orchestrator
+    
+    Orchestrator -->|Final Confirmation| User

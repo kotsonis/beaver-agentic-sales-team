@@ -599,7 +599,7 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")
 model = OpenAIServerModel(
-    model_id="gpt-4",
+    model_id="gpt-4o-mini",
     api_key=OPENAI_API_KEY,
     api_base = OPENAI_BASE_URL,
 )
@@ -607,20 +607,47 @@ model = OpenAIServerModel(
 """Set up tools for your agents to use, these should be methods that combine the database functions above
  and apply criteria to them to ensure that the flow of the system is correct."""
 
-# Define the shared state structure to be passed between agents to maintain context and reduce hallucinations.
-
-class OrderState(TypedDict):
-    """The shared memory of the transaction."""
-    request_id: int
-    user_raw_request: str
-    simulation_date: str          # The 'Clock' for this request
-    items: List[Dict[str, Any]]   # Structured list of items
-    stock_status: Dict[str, str]  # Status of each item
-    quote_amount: float           # Final calculated price
-    transaction_ids: List[str]    # DB IDs after sale
-    logs: List[str]               # Audit trail
-
 # Tools for inventory agent
+@tool
+def search_item_in_catalog(search_term: str) -> str:
+    """
+    Intelligently maps a user's description to the exact catalog item name using the LLM.
+    Use this FIRST to get the correct 'item_name' for other tools.
+    
+    Args:
+        search_term: The user's vague description (e.g. "printer paper", "shiny paper").
+    """
+    # 1. Quick exact/synonym check (Free & Fast)
+    valid_names = [p['item_name'] for p in paper_supplies]
+    if search_term in valid_names: return search_term
+    
+    # 2. LLM Classification (Robust & "Agentic")
+    # We ask the model to act as a classifier. 
+    # This matches 'printer paper' -> 'Standard copy paper' perfectly.
+    prompt = f"""
+    You are an inventory mapping assistant.
+    Catalog: {valid_names}
+    
+    User Request: "{search_term}"
+    
+    Task: Return ONLY the exact name from the catalog that best matches the request.
+    If no reasonable match exists, return 'Product Not Found'.
+    """
+    
+    messages = [{"role": "user", "content": prompt}]
+    
+    try:
+        # Use the global model instance to get a quick classification
+        response = model(messages)
+        # Extract content from response (handling smolagents or raw output)
+        if hasattr(response, 'content'):
+            return response.content.strip()
+        return str(response).strip()
+    except Exception:
+        # Fallback to fuzzy if LLM call fails
+        matches = difflib.get_close_matches(search_term, valid_names, n=1, cutoff=0.3)
+        return matches[0] if matches else "Product Not Found"
+    
 @tool
 def map_product_name(search_term: str) -> str:
     """
@@ -635,14 +662,23 @@ def map_product_name(search_term: str) -> str:
     # Exact Match
     if search_term in valid_names:
         return search_term
-        
-    # Fuzzy Match (Simulates Embeddings/Semantic Search)
-    # cutoff=0.3 allows for loose matches like "print paper" -> "Standard copy paper"
-    matches = difflib.get_close_matches(search_term, valid_names, n=1, cutoff=0.3)
-    
+      
+       
+    # Case-insensitive Match
+    for name in valid_names:
+        if search_term.lower() == name.lower():
+            return name
+
+    # Fuzzy Match
+    matches = difflib.get_close_matches(search_term, valid_names, n=1, cutoff=0.4)
     if matches:
         return matches[0]
-            
+    
+    # Substring Fallback
+    for name in valid_names:
+        if search_term.lower() in name.lower() or name.lower() in search_term.lower():
+            return name
+        
     return "Product Not Found"
 
 @tool
@@ -687,8 +723,7 @@ def restock_inventory(item_name: str, quantity: int, date: str) -> str:
     # Calculate cost (default to 0.10 if not found)
     price_map = {p['item_name']: p['unit_price'] for p in paper_supplies}
     cost = quantity * price_map.get(item_name, 0.10)
-    
-    # Uses the helper function provided in starter code
+    # Create the transaction in the database
     create_transaction(item_name, 'stock_orders', quantity, cost, date)
     return f"Restocked {quantity} units of {item_name}."
 
@@ -769,6 +804,17 @@ def check_funds(date: str) -> float:
     # Uses the helper function provided in starter code
     return get_cash_balance(date)
 
+@tool
+def generate_report_tool(date: str) -> str:
+    """Generates a full financial report. Only use if asked.
+    Args:
+        date: The date to generate the report for.
+        
+    Returns:
+        str: The financial report as a string.
+        """
+    return str(generate_financial_report(date))
+
 
 # Set up your agents and create an orchestration agent that will manage them.
 
@@ -782,12 +828,16 @@ inventory_agent = ToolCallingAgent(
     
     PROTOCOL:
     1. Receive a product name (or vague description) and a quantity.
-    2. Use 'map_product_name' to find the real database name.
+    2. Use 'search_item_in_catalog' to find the real database name.
     3. Use 'check_stock' to see if we have enough.
-    4. IF STOCK IS LOW: You MUST use 'restock_inventory' to buy the difference immediately.
+    3. IF stock < requested quantity:
+       - Call 'restock_item' immediately to cover the difference.
+       - Call 'check_delivery_time' to inform the user when it arrives.
     5. Return the exact item name and confirmation that stock is ready.
     """,
-    tools=[map_product_name, check_stock, check_supplier_delivery, restock_inventory, audit_inventory]
+    tools=[search_item_in_catalog, check_stock, check_supplier_delivery, restock_inventory, audit_inventory],
+    verbosity_level = 1,
+    max_steps = 5,
 )
 
 quoting_agent = ToolCallingAgent(
@@ -800,13 +850,21 @@ quoting_agent = ToolCallingAgent(
     2. Check 'get_historical_quotes' to ensure pricing consistency.
     3. Provide the final quote amount.
     """,
-    tools=[get_historical_quotes, calculate_quote]
+    tools=[get_historical_quotes, calculate_quote],
+    verbosity_level=1,
+    max_steps = 5,
 )
 sales_agent = ToolCallingAgent(
     model=model,
     name="sales_agent",
-    description="Records the final sale in the database.",
-    tools=[finalize_transaction]
+    description="""
+    You are the Sales Finisher.
+    1. Finalize the sale ('finalize_transaction').
+    2. Check funds ('check_funds') or generate reports ('generate_report_tool') ONLY if requested.
+""",
+    tools=[finalize_transaction, check_funds, generate_report_tool],
+    verbosity_level=1,
+    max_steps = 5,
 )
 
 # I am defining the orchestrator agent that will manage the workflow
@@ -829,12 +887,13 @@ orchestrator = ToolCallingAgent(
     6. Respond to the user confirming the order details.
     """,
     managed_agents=[inventory_agent, quoting_agent, sales_agent],
-    tools=[]
+    tools=[],
+    verbosity_level=1,
+    max_steps=15,
 )
 """
  description=
     You are the Process Manager.
-    
     YOUR JOB:
     1. Read the user's request text carefully.
     2. EXTRACT THE DATE: The date is always mentioned in the text (e.g., "by April 15, 2025"). Use this date for ALL tool calls.
@@ -920,17 +979,18 @@ def run_test_scenarios():
         print(f"Updated Cash: ${current_cash:.2f}")
         print(f"Updated Inventory: ${current_inventory:.2f}")
 
-        results.append(
-            {
-                "request_id": idx + 1,
-                "request_date": request_date,
-                "cash_balance": current_cash,
-                "inventory_value": current_inventory,
-                "response": response,
-            }
-        )
+        results_entry = {
+            "request_id": idx + 1,
+            "request_date": request_date,
+            "cash_balance": current_cash,
+            "inventory_value": current_inventory,
+            "response": response,
+        }
+        
+        results.append(results_entry)
 
-        time.sleep(1)
+        pd.DataFrame(results).to_csv("test_results.csv", index=False)
+        # time.sleep(1)
 
     # Final report
     final_date = quote_requests_sample["request_date"].max().strftime("%Y-%m-%d")
@@ -940,7 +1000,7 @@ def run_test_scenarios():
     print(f"Final Inventory: ${final_report['inventory_value']:.2f}")
 
     # Save results
-    pd.DataFrame(results).to_csv("test_results.csv", index=False)
+    # pd.DataFrame(results).to_csv("test_results.csv", index=False)
     return results
 
 
