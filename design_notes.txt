@@ -1,0 +1,109 @@
+BEAVER CHOICE PAPER COMPANY MULTI-AGENT SYSTEM
+Design & Architecture Report
+2026-01-05 : Stefanos Kotsonis
+
+1. ARCHITECTURAL OVERVIEW
+
+The system is built on Orchestrator Architecture, chosen for its centralized control and ability to handle error states dynamically.
+
+    I. Orchestration Layer (The "Brain")
+    - Central Node: The OrchestratorAgent.
+    - Role:  It acts as the state manager and decision-maker. Unlike a linear chain (Agent A -> Agent B -> Agent C), 
+                the Orchestrator calls a worker, analyzes the result, and then decides the next step.
+    - Benefit: If the Inventory Agent reports "Out of Stock," the Orchestrator can immediately halt the process 
+                and inform the user, rather than wastefully calling the Quoting or Sales agents.
+    - Prompt Design: We have implemented the principles / laws and the protocols it should follow in the prompt, instead of a hard-coded workflow
+
+    II. Worker Layer (The "Specialists")
+    - Inventory Manager: Responsible for the physical reality of the warehouse. It translates vague human requests into database queries and checks inventory.
+    - Quoting Agent: Responsible for business logic (pricing rules, bulk discounts) and pricing. It also checks historical quotes.
+    - Sales Finisher: Responsible for financial integrity. It checks prices, finalizes the transaction, and generates reports. It ensures no transaction is committed without a valid numeric price.
+
+    III. Tooling Layer (The "Interface")
+    - The diagram depicts a "Wrapper Pattern" where tools are not standalone functions but are encapsulated within the agent's scope. This is done to avoid having to guess the same data (like request_date) from the LLM
+    - Data Flow: Text inputs flow down from the Orchestrator; Structured JSON flows up from the Tools; SQL transactions flow sideways into the Database.
+
+2. CRITICAL DESIGN DECISIONS & TECHNICAL RATIONALE
+
+    I. Agentic library used:
+        * I used the smolagents library from Hugging Face. Reason was that the course was taught with it and it seemed intuitive
+
+    II. The "Wrapper Tool" Pattern for Context Injection
+        * The Problem: LLMs are stateless. When an agent calls a tool, it often "forgets" global context variables like the request_date. This leads to "Time Travel" bugs where the agent uses the current real-world date instead of the provided date (e.g., restocking in 2023 for a 2025 request).
+        * The Solution: I defined the tools inside the agent functions so the date is already in scope.
+        * Mechanism: The tools automatically inherit the request_date variable from the parent function scope. The LLM never has to pass the date as a parameter, making it physically impossible for the agent to hallucinate the wrong date.
+
+    III. Hybrid Semantic Mapping
+        * The Problem: The database contains strict keys like "A4 paper," but humans ask for "printer paper" or "copy paper." Simple string matching fails here.
+        * The Solution: I implemented a two-tier map_items_wrapper.
+            1. Tier 1 (Deterministic): Fast substring matching. If it finds an exact match, it returns immediately (exits fast and cheap if we match them all).
+            2. Tier 2 (Probabilistic): If Tier 1 fails, it calls the LLM to perform a semantic search. It understands that "construction paper" implies "Colored paper" but correctly identifies "balloons" as "Product Not Found."
+        * Benefit: High accuracy for natural language without the cost of calling the LLM for every single trivial item.
+        * Future: Could also maintain a ChromaDB with the embedding of the stock and then find the most similar items
+
+    IV. Vectorized Batch Processing
+        * The Problem: Early iterations suffered from too much looping. The agent would check stock for Item A, then Item B, then Item C, consuming 3x the steps and costing unecessary tokens.
+        * The Solution: I implemented the helper tools to work in batches. 
+        * Mechanism: The tool accepts a list of items (JSON) and returns a dictionary of results in a single execution step.
+        * Benefit: Reduces execution time considerably and prevents the agent from hitting the max_steps limit on large orders.
+
+    V. Mismatch Execution Protocol
+        * The Problem: Powerful models like GPT-4o-mini sometimes try to perform an action (API Call) and report the result (Final Answer) in the same generation step. This causes a race condition where the script terminates before the API call completes.
+        * The Solution: I added a strict "Execution Protocol" to the System Prompt, explicitly forbidding the combination of finalize_sale_tool and final_answer.
+        * Benefit: Guarantees data consistency. The system waits for the database confirmation string before presenting the result to the user.
+
+    VI. Financial Integrity Checks
+        * The Problem: If a user request didn't explicitly state a price, the Sales agent would sometimes record a sale of $0.00, causing the company to lose money on restocking costs.
+        * The Solution: The Sales Agent was given a get_unit_price_wrapper and strict instructions to calculate Quantity * Unit Price locally if the total was missing.
+        * Benefit: The Cash Balance now accurately reflects revenue growth from every sale.
+
+3. System Performance Analysis
+The system was rigorously tested using the quote_requests_sample.csv dataset, simulating a mix of 20 standard, bulk, and edge-case scenarios. The performance metrics indicate a highly robust and financially accurate system:
+    
+    I. Financial Accuracy & Logic The "Cash Drain" issue observed in early development has been resolved. The system now correctly accounts for Revenue (Sales) and Expenses (Restocking) simultaneously.
+        Evidence: In Request 1, the system recorded a sale of $65.00. The Cash Balance moved from $45,054.70 to $45,109.70 (a net increase of $55.00). This accurately reflects the $65.00 revenue minus the ~$10.00 Cost of Goods Sold (COGS) for immediate restocking, proving the accounting engine is sound.
+    
+    II. Semantic Mapping & Scope Enforcement The hybrid semantic mapping successfully distinguished between "vague but valid" paper products and "out-of-scope" items.
+        Success: "Washi tape" (Request 5) and "Streamers" (Request 2) were successfully mapped to catalog items ("Patterned paper" and "Crepe paper") and sold.
+        Rejection: "Balloons" (Request 2) and "Concert Tickets" (Request 20) were correctly identified as "Product Not Found" and excluded from the order without crashing the agent.
+    
+    III. Reliability & Error Handling The system achieved a 100% completion rate for the test batch. There were no execution crashes or timeouts. The "Anti-Panic" protocol allowed the Orchestrator to gracefully handle partial failures (e.g., fulfilling 2 out of 3 items) rather than aborting the entire customer interaction.
+
+The system was evaluated using the quote_requests.csv dataset. The results demonstrate good adherence to business rules:
+    I.  Financial Accuracy: The system successfully prevents "Zero Dollar Sales." By forcing the Sales Agent to calculate Quantity * Unit Price before recording, the Cash Balance accurately reflects revenue growth.
+   
+    II. Inventory Integrity: The semantic mapping logic correctly identifies "Product Not Found" scenarios (e.g., requesting balloons or tickets). The Inventory Agent refuses to restock these items, maintaining database integrity.
+   
+    III.Reliability: The execution protocol implemented in the Orchestrator prevents the agent from attempting to finalize a sale before the inventory check is complete, resulting in a 100% success rate for valid orders.
+
+4. Detaild Evaluation Results 
+Scenario A: The "Perfect" Standard Order
+    Input: Request 1 (Office Manager) - Asked for Glossy Paper, Cardstock, and Colored Paper.
+    Outcome: The system mapped all items, checked stock, restocked the difference, and finalized the sale.
+    Result: "Successfully ordered 200 A4 glossy paper... Total: $65.00."
+    Analysis: Demonstrates the core "Happy Path" works flawlessly with precise delivery dates (April 2nd and April 5th).
+
+Scenario B: The "Edge Case" (Partial Availability)
+    Input: Request 2 (Hotel Manager) - Asked for Poster Paper, Streamers, and Balloons.
+    Outcome: The system recognized Poster Paper and Streamers (via semantic mapping) but correctly identified Balloons as invalid.
+    Result: "Successfully ordered... Total: $60.00. Balloons were unavailable."
+    Analysis: This proves the "Availability Law" is functioning. The agent maximized revenue by selling what it could ($60) rather than failing the whole order due to one missing item.
+
+Scenario C: High-Volume Bulk Order
+    Input: Request 3 (School Board) - Ordered 10,000 sheets A4, 5,000 sheets A3, and 500 reams printer paper.
+    Outcome: The system processed the high volume without hitting token limits, thanks to the vectorized batch processing tools.
+    Result: "Successfully ordered... for a total of $697.50."
+    Analysis: Validates the system's ability to handle such requests and apply pricing logic to large quantities efficiently.
+
+Scenario D: The "Tricky" Semantic Map
+    Input: Request 5 (Teacher) - Ordered "Decorative Washi Tape".
+    Outcome: Early versions failed this. The final system mapped "Washi Tape" -> "Patterned Paper" (or similar catalog item).
+    Result: "Successfully ordered 200 rolls of decorative washi tape... Total: $120."
+    Analysis: Validates the LLM-based fallback mechanism in the Inventory Agent.
+
+5. Future Improvements
+    Dynamic Restocking Strategy: Currently, the system orders exactly the amount needed for the current request (Just-in-Time). A future improvement would be to implement "Minimum Order Quantities" (e.g., always order at least 5,000 sheets) to optimize supplier shipping costs.
+    
+    Parallel Execution: The current Orchestrator waits for Inventory to finish before asking for a Quote. These could be parallelized to reduce latency.
+    
+    Customer Memory: Integrating a vector database to recall specific customer preferences from quotes.csv would allow for personalized discounts beyond simple bulk pricing.

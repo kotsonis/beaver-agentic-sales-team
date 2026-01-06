@@ -1,6 +1,6 @@
 # Multi-Agent System Design & Reflection
 **Project:** Beaver's Choice Paper Company Automation
-**Author:** Consultant (You)
+**Author:** Stefanos Kotsonis
 
 ## 1. System Architecture
 The system utilizes a hierarchical multi-agent architecture powered by `smolagents` and `gpt-4o-mini`. The design mimics a real-world corporate structure to ensure clear separation of concerns and maintainable logic.

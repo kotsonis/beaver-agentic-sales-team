@@ -1,41 +1,46 @@
 graph TD
-    User((Customer Request)) --> Orchestrator[Orchestrator Agent]
+    %% Nodes
+    User(["Customer Request"])
+    Orch["Orchestrator Agent"]
     
-    Orchestrator -->|1. Identify & Check Stock| Inventory[Inventory Agent]
-    Orchestrator -->|2. Request Price Quote| Quote[Quoting Agent]
-    Orchestrator -->|3. Finalize Order| Sales[Sales Agent]
-    
-    subgraph "Inventory Tools"
-        I1(map_item_to_database)
-        I2(check_stock)
-        I3(check_supplier_delivery)
-        I4(restock_inventory)
+    subgraph "Worker Agents"
+        Inv["Inventory Manager"]
+        Quote["Quoting Agent"]
+        Sales["Sales Finisher"]
     end
-    
-    subgraph "Quoting Tools"
-        Q1(calculate_quote)
-        Q2(get_historical_quotes)
+
+    subgraph "Tools & Logic"
+        %% The fix: Quotes added around the label below
+        Map["map_items_wrapper <br/><i>(Semantic AI Mapping)</i>"]
+        Check["check_stock_wrapper"]
+        Restock["restock_wrapper"]
+        Audit["audit_inventory_wrapper"]
+        
+        Hist["get_historical_quotes"]
+        Calc["calculate_quote_batch"]
+        
+        Price["check_prices_batch"]
+        Trans["finalize_transaction"]
+        Report["generate_daily_report"]
     end
-    
-    subgraph "Sales Tools"
-        S1(finalize_transaction)
-        S2(generate_report_tool)
+
+    subgraph "Database Layer"
+        DB[("Munder Difflin DB")]
     end
+
+    %% Flow
+    User -->|Text Request + Date| Orch
+    Orch -->|"1. Check Availability"| Inv
+    Inv --> Map --> Check
+    Check -->|"Low Stock?"| Restock
+    Inv -.->|"Audit Request"| Audit
     
-    Inventory --> I1
-    Inventory --> I2
-    I2 -->|Stock Low| I4
-    I4 --> I3
-    I2 -->|Stock OK| Orchestrator
+    Orch -->|"2. Get Pricing"| Quote
+    Quote --> Hist & Calc
     
-    Quote --> Q1
-    Quote --> Q2
-    
-    Sales --> S1
-    Sales --> S2
-    
-    Inventory -->|Stock Ready| Orchestrator
-    Quote -->|Price Confirmed| Orchestrator
-    Sales -->|Sale Recorded| Orchestrator
-    
-    Orchestrator -->|Final Confirmation| User
+    Orch -->|"3. Record Order"| Sales
+    Sales --> Price --> Trans
+    Sales -.->|"Verify Cash"| Report
+
+    %% Data Connections
+    Map & Check & Restock & Audit & Hist & Trans & Report <--> DB

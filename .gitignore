@@ -1,2 +1,10 @@
 .env
 munder_difflin.db
+src/agents v0.1.py
+.gitignore
+src/tools v0.2.py
+src/tools v0.3.py
+src/tools_old.py
+*.pyc
+test_results v2.csv
+test_results_v1.csv
