@@ -1,26 +1,4 @@
 import pandas as pd
-import numpy as np
-import os
-import time
-import dotenv
-import ast
-from sqlalchemy.sql import text
-from datetime import datetime, timedelta
-from typing import Dict, List, Union
-
-
-
-########################
-########################
-########################
-# YOUR MULTI AGENT STARTS HERE
-########################
-########################
-########################
-
-
-# Set up and load your env parameters and instantiate your model.
-from smolagents import ToolCallingAgent, OpenAIServerModel, tool
 
 from src.database import (
     init_database,
@@ -30,10 +8,6 @@ from src.database import (
 
 from src.config import model
 from src.agents import OrchestratorAgent
-
-"""Set up tools for your agents to use, these should be methods that combine the database functions above
- and apply criteria to them to ensure that the flow of the system is correct."""
-
 
 # Run your test scenarios by writing them here. Make sure to keep track of them.
 def run_test_scenarios():
@@ -92,8 +66,6 @@ def run_test_scenarios():
         ############
         ############
         try:
-            # We pass the raw text. The Orchestrator is instructed to extract the date from it.
-            # (e.g. "Please deliver by April 15, 2025")
             response = orchestrator.run(request_with_date, additional_args=request_additional_context)
         except Exception as e:
             response = f"Error: {e}"
